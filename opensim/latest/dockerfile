@@ -1,0 +1,92 @@
+FROM python:3.8.13-slim-buster
+
+# Prepare environment variables with paths used now and later (using absolute paths )
+
+# Set environment variable with the dependencies install directory
+ENV OPENSIM_DEPENDENCIES_HOME="/opensim_dependencies_install"
+
+# Set environment variable with the OpenSim install directory (will be used by child images)
+ENV OPENSIM_INSTALL="/opensim_install"
+
+# Set DEBIAN_FRONTEND to avoid interactive timezone prompt when installing
+# packages.
+RUN apt-get update && apt-get --yes --fix-missing install \
+    git \
+    build-essential libtool autoconf \
+    wget \
+    pkg-config \
+    gfortran \
+    freeglut3-dev \
+    libxi-dev libxmu-dev liblapack-dev libopenblas-dev libssl-dev \
+    software-properties-common
+
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.23.2/cmake-3.23.2.tar.gz \
+    && tar -zxvf cmake-3.23.2.tar.gz \
+    && cd cmake-3.23.2 \
+    && ./bootstrap \
+    && make -j6 \
+    && make -j6 install \
+    && cd .. \
+    && rm cmake-3.23.2.tar.gz
+
+# This clones latest master, we should use tags for public releases
+RUN git clone https://github.com/opensim-org/opensim-core.git \
+    && cd opensim-core \
+    && git checkout master \
+    && rm -rf .git \
+    && cd ..
+
+RUN mkdir opensim_dependencies_build \
+    && cd opensim_dependencies_build \
+    && cmake ../opensim-core/dependencies/ \
+      -LAH -DCMAKE_INSTALL_PREFIX=$OPENSIM_DEPENDENCIES_HOME -DCMAKE_BUILD_TYPE=Release \
+      -DSUPERBUILD_ezc3d=ON -DOPENSIM_WITH_TROPTER=OFF \
+      -DOPENSIM_WITH_CASADAI=OFF \
+    && make -j6 \
+    && cd .. \
+    && rm -rf opensim_dependencies_build
+
+RUN apt-get update \
+    && apt-get --yes install \
+        software-properties-common \
+        libpcre3 libpcre3-dev flex bison
+RUN pip install numpy
+
+# install Swig from source then install
+RUN mkdir swig-source && cd swig-source \
+    && wget https://github.com/swig/swig/archive/refs/tags/rel-4.0.2.tar.gz \
+    && tar xzf rel-4.0.2.tar.gz \
+    && cd swig-rel-4.0.2 \
+    && sh autogen.sh \
+    && ./configure --prefix=$HOME/swig --disable-ccache \
+    && make -j6 \
+    && make -j6 install \
+    && cd ../.. \
+    && rm -rf swig-source
+
+# Build and install opensim-core with python bindings
+RUN mkdir opensim_build \
+    && cd opensim_build \
+    && cmake ../opensim-core \
+        -DSWIG_DIR=~/swig/share/swig -DSWIG_EXECUTABLE=~/swig/bin/swig -DBUILD_PYTHON_WRAPPING=ON \
+        -DCMAKE_INSTALL_PREFIX=$OPENSIM_INSTALL -DOPENSIM_DEPENDENCIES_DIR=$OPENSIM_DEPENDENCIES_HOME \
+        -DOPENSIM_C3D_PARSER=ezc3d -DBUILD_TESTING=OFF -DSWIG_DOXYGEN=OFF \
+        -DOPENSIM_WITH_TROPTER=OFF -DOPENSIM_WITH_CASADI=OFF \
+        -DPYTHON_EXECUTABLE=/usr/bin/python3.8 \
+        -DPYTHON_INCLUDE_DIR=/usr/include/python3.8 \
+        -DPYTHON_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.8.so \
+        -DPYTHON_NUMPY_INCLUDE_DIR=/usr/local/lib/python3.8/dist-packages/numpy/core/include \
+    && make -j6 \
+    && make -j6 install \
+    && cd ..\
+    && rm -rf opensim_build \
+    && rm -rf swig
+
+# Set LD_LIBRARY_PATH so pyhton can load the shard libraries
+ENV LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$OPENSIM_DEPENDENCIES_HOME/simbody/lib:$OPENSIM_INSTALL/lib"
+ENV PATH=$PATH:"$OPENSIM_INSTALL/bin"
+
+# Ideally we install the module but that doesn't work now, so we set PYTHONPATH instead
+ENV PYTHONPATH="$OPENSIM_INSTALL/lib/python3.8/site-packages"
+# RUN cd "$OPENSIM_INSTALL/lib/python3.8/site-packages" \
+#    && python3.8 setup.py install
