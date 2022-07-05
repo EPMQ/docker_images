@@ -1,0 +1,19 @@
+FROM python:3.8.13-slim-buster
+
+RUN apt-get update && apt-get upgrade -y
+
+WORKDIR /home
+
+COPY requirements.txt requirements.txt
+
+RUN pip install -r requirements.txt
+
+RUN mkdir GitHub \
+    && cd GitHub \
+    && git clone https://github.com/xioTechnologies/Fusion.git \
+    && cd Fusion/Python/Python-C-API \
+    && python setup.py
+
+
+
+
